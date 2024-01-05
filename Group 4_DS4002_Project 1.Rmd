@@ -1,0 +1,372 @@
+---
+title: "Predicting Age Groups for Advertisement"
+subtitle: "DS 4002 Project 1"
+author: "Ananya, Shireen, Nancy"
+output: ioslides_presentation
+date: "2024-01-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(rpart)
+library(pROC)
+library(caret)
+library(MLmetrics)
+library(dplyr)
+library(mltools)
+library(dplyr)
+library(data.table)
+library(randomForest)
+install.packages("gridExtra", repos = "http://cran.us.r-project.org")
+library(gridExtra)
+```
+
+```{r, include= FALSE}
+#setwd('/Users/ananyasai/Downloads')
+#file.choose()
+health<-read.csv("/Users/shireenshah/Desktop/NHANES_age_prediction.csv")
+```
+
+## Introduction and Problem
+
+**Dataset:** National Health and Nutrition Health Survey 2013-2014 Age Prediction Subset
+
+**Project Stakeholder:** Adult Diaper Company & their advertising team
+
+**Problem:** Is there a way to direct advertisements of the product, adult diapers, so that it can reach the right age group?
+
+## Question
+
+**What is the predictive power of classification for predicting the likelihood of being
+categorized as a "senior" based on these health indicators?**
+
+This gives us insights into how different health factors correlate with age. If the model has strong prediction power, it could be used by a company that makes products for seniors, such as adult diapers, to direct their advertisements to the right people.
+
+## Dataset Features
+
+This dataset has over 2000 observations and 7 features
+
+- Age group: A binary variable of whether or not the respondent is classified as a senior (target variable)
+- Age: Age as a continuous variable 
+- Gender
+- Physical fitness: If the respondent engages in moderate or vigorous intensity sports, fitness, or recreational activities in the typical week. Binary variable: 1 = physically fit, 2 = no
+- BMI: continuous variable
+- Blood glucose after fasting
+- Diabetes: Binary variable, 1 = diabetic, 2 = not diabetic
+- Oral: glucose tolerance test for type 2 diabetes
+- Insulin: Respondent's blood insulin levels
+
+## Exploratory Data Analysis 
+
+```{r, include= FALSE}
+health$age_group <- as.factor(health$age_group) #factor to be able to graph
+health_new <- subset(health, select = -SEQN) #removing Sequence as it is not relevant for our purposes
+str(health_new) #gives an overall overview of the data (type of variables, num of observations, variables, and sample of data)
+```
+```{r}
+health1 <- health_new %>% rename(Age = RIDAGEYR)
+health2 <- health1 %>% rename(Gender = RIAGENDR)
+health3 <- health2 %>% rename(Fitness_yn = PAQ605)
+health4 <- health3 %>% rename(BMI = BMXBMI)
+health5 <- health4 %>% rename(Glucose = LBXGLU)
+health6 <- health5 %>% rename(Diabetic_yn = DIQ010)
+health7 <- health6 %>% rename(Oral = LBXGLT)
+health8 <- health7 %>% rename(Insulin = LBXIN)
+summary(health8)
+
+#overall distribution of different variables 
+```
+```{r, include= FALSE}
+#looking for NAs 
+health_new <- replace(health_new, health_new=="", NA)
+sum(is.na(health_new)) #0 
+```
+
+## EDA cont.
+
+```{r}
+tp <- health %>%
+  group_by(age_group) %>%
+  summarise(count = n()) %>%
+  mutate(proportion = count / sum(count))
+
+p <- ggplot(data = tp, aes(x=age_group, y=proportion, fill = age_group)) +
+  geom_bar(stat="identity") +
+  labs(
+    title = "Proportion of Seniors and Adults",
+    x = "Age Group",
+    y = "Proportion"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) + 
+  theme_minimal()
+
+# Boxplot of BMI across different age groups
+p2<- ggplot(health, aes(x=age_group, y=BMXBMI, fill=age_group)) +
+  geom_boxplot() +
+  labs(
+    title = "Distribution of BMI Across Age Groups",
+    x = "Age Group",
+    y = "BMI"
+  ) +
+  theme_minimal()
+
+grid.arrange(p, p2, ncol = 2)
+```
+
+## EDA cont.
+
+```{r}
+# Scatter plot of BMI vs Blood Glucose Level
+#To understand if age_group influences this relationship, and if the higher the BMI, there is a higher correlation for Blood Glucose Level
+ggplot(health, aes(x=BMXBMI, y=LBXGLU)) +
+  geom_point(aes(color=age_group), alpha=0.6) +
+  labs(
+    title = "Relationship Between BMI and Blood Glucose Level",
+    x = "BMI",
+    y = "Blood Glucose Level (LBXGLU)"
+  ) +
+  theme_minimal()
+
+```
+
+## EDA cont.
+
+```{r}
+#Scatterplot of Blood Glucose Level vs Oral
+p3<- ggplot(health, aes(x= LBXGLU, y =LBXGLT )) + geom_point(aes(color = age_group), alpha =0.6) + labs(
+  title = "Blood Glucose Lvl v. Oral Glucose Test",
+  x = "Blood Glucose Level",
+  y = "Oral"
+) + theme_minimal()
+
+#Scatterplot of Blood Insulin Level vs Oral
+p4<- ggplot(health, aes(x= LBXIN, y =LBXGLT )) + geom_point(aes(color = age_group), alpha =0.6) + labs(
+  title = "Blood Insulin Lvl v. Oral Glucose Test",
+  x = "Blood Insulin Level",
+  y = "Oral"
+) + theme_minimal()
+
+grid.arrange(p3, p4, ncol = 2)
+```
+
+## EDA cont.
+
+```{r}
+ggplot(health, aes(x = RIDAGEYR)) + geom_histogram(aes(color = age_group)) + labs(
+  title = "Age distribution",
+  x = "Age",
+) + theme_minimal()
+```
+
+## EDA cont.
+
+```{r}
+health$RIAGENDR <- as.factor(health$RIAGENDR)
+
+tp <- health %>%
+  group_by(RIAGENDR, age_group) %>%
+  summarise(count = n(), .groups = 'drop' ) %>%
+  mutate(proportion = count / sum(count))
+
+ggplot(data = tp, aes(x=RIAGENDR, y=proportion, fill = age_group)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  labs(
+    title = "Gender Distribution by Age Group",
+    x = "Gender",
+    y = "Proportion"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+  scale_x_discrete(labels = c("1" = "Male", "2" = "Female")) +
+  theme_minimal()
+```
+
+## EDA cont.
+
+```{r}
+health8 <- health8 %>%
+  mutate(age_group = ifelse(Age >= 60, "Senior", "Adult"))
+
+#View(health8)
+
+##checking the gender distribution again to see if there's a difference
+
+health8$Gender <- as.factor(health8$Gender)
+
+tp <- health8 %>%
+  group_by(Gender, age_group) %>%
+  summarise(count = n(), .groups = 'drop' ) %>%
+  mutate(proportion = count / sum(count))
+
+ggplot(data = tp, aes(x=Gender, y=proportion, fill = age_group)) +
+  geom_bar(stat="identity", position=position_dodge()) +
+  labs(
+    title = "Gender Distribution by Age Group Updated",
+    x = "Gender",
+    y = "Proportion"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+  scale_x_discrete(labels = c("1" = "Male", "2" = "Female")) +
+  theme_minimal()
+```
+
+## Methods and Processing Plan
+
+Random forest: ML algorithm that builds multiple decision trees during training and outputs the mode of the classes (classification) of individual trees for prediction
+
+1. Readjusting threshold for 'senior' cut off
+2. Normalizing and one hot encoding
+3. Checking prevalence
+4. Data partitioning
+
+
+```{r, include= FALSE}
+health_df <- health8 %>%
+  mutate(age_group = ifelse(Age >= 60, "1", "0"))
+```
+
+```{r, include= FALSE}
+maxmin <- function(z) {
+  if(is.numeric(z)) {
+    (z - min(z, na.rm = TRUE)) / (max(z, na.rm = TRUE) - min(z, na.rm = TRUE))
+  } else {
+    z
+  }
+}
+
+normalized_health <- as.data.frame(lapply(health_df, maxmin))
+```
+
+```{r, include= FALSE}
+normalized_health$age_group <- as.factor(normalized_health$age_group)
+health_1hot <- one_hot(as.data.table(normalized_health),cols = "auto",sparsifyNAs = TRUE,naCols = FALSE,dropCols = TRUE,dropUnusedLevels = TRUE)
+```
+
+```{r, include= FALSE}
+health_1hot = health_1hot[, c(2,4,5,6,8,9,10)]
+# extracting the continuous age variable and the one half of the one hot encoded feature 
+```
+
+```{r, include= FALSE}
+# Prevalence
+health_1hot$age_group_1[is.na(health_1hot$age_group_1)] # 0 
+
+#Check the prevalence 
+(prevalence <- table(health_1hot$age_group_1)[[1]]/length(health_1hot$age_group_1))#we are using [[]] to pull at the second entry/column in the table
+# comes out to 0.76905
+table(health_1hot$age_group_1)
+1752/(1752+546) # this matches our prevalence code :) 
+```
+```{r}
+set.seed(11)
+part_index <- caret::createDataPartition(health_1hot$age_group_1, p=0.7, list= FALSE)
+training1<- health_1hot[part_index, ]
+testing1<- health_1hot[-part_index, ]
+```
+
+## Random Forest Final Model
+
+```{r, include= FALSE}
+training1$age_group_1 <- as.factor(training1$age_group_1)
+testing1$age_group_1 <- as.factor(testing1$age_group_1)
+
+health_rf_model <- randomForest::randomForest(age_group_1 ~ ., data = training1)
+
+print(health_rf_model)
+```
+
+```{r, echo=FALSE}
+health_rf_model <- randomForest::randomForest(age_group_1 ~ ., data = training1)
+
+print(health_rf_model)
+```
+
+## Model Evaluation
+
+```{r, include= FALSE}
+# making predictions 
+health_predictions5 <- predict(health_rf_model, testing1)
+# print(health_predictions5)
+
+# Evaluate the model
+conf_matrix4 <- table(testing1$age_group_1, health_predictions5)
+print(conf_matrix4)
+
+
+accuracy3 <- sum(diag(conf_matrix4)) / sum(conf_matrix4)
+```
+
+```{r, echo= FALSE}
+print(paste("Accuracy:", accuracy3))
+# accuracy is 0.767
+```
+
+```{r, include=FALSE}
+# Our model has 51 false positives and 138 false negatives 
+# In this case, our model predicted that 51 people were seniors and they weren't. If we had expanded our infrastructure to advertise diapers to all of them, we would lose money on people who probably aren't going to buy our diapers. Our model then predicted that 138 were not seniors when they indeed were. Here, we lost a lot of potential customers we could have advertised to.
+
+confusion_matrix1<- table(Actual = testing1$age_group_1, Predicted = health_predictions5)
+print(confusion_matrix1)
+TP<- 425
+FN <- 138
+TN <- 69
+FP <- 51
+```
+
+```{r, include= FALSE}
+# Sensitivity 
+sensitivity <- TP / (TP+FN)
+#print(sensitivity)
+#0.75
+
+# Specificity 
+specificity <- TN / (TN+FP)
+#print(specificity)
+#0.575 --> improved from initial model 
+
+```
+
+```{r, echo = FALSE}
+print(paste("Sensitivity:", sensitivity))
+print(paste("Specificity:", specificity))
+```
+
+---
+
+```{r, include = FALSE}
+health_predictions5 <- predict(health_rf_model, testing1, type = "prob")
+health_roc5 <- pROC::roc(testing1$age_group_1, (health_predictions5[,"1"]))
+
+# plotting the ROC curve
+```
+
+```{r, echo= FALSE}
+plot(health_roc5, main = "ROC Curve")
+abline(a=0, b=1,col="red")
+
+auc(health_roc5)
+# AUC is 0.6927 which is close to where we started, a little worse but at the expense of leveling out specificity 
+```
+
+## Conclusion
+
+- Constructing this model involved several trials and errors
+- Adjusted many different thresholds 8-9 times
+
+- Finally settled on model with the most consistency across all evaluation metrics
+- Between our initial and final model, we were able to keep the AUC and accuracy score similar while increasing specificity and only slightly compromising sensitivity
+- Ultimately, although trying our best to make a model that was a little more reliable, it's average at best and there are a few more things we would consider to revise it further before confidently implementing it into our business
+
+## Future Work
+
+Limitations
+
+- Only 7 features
+- Information specifically on incontinence
+
+Additional analysis
+
+- Use more features by combining other data sets
+- Try different predictive models
+
+
